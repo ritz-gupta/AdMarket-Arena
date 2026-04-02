@@ -281,6 +281,134 @@ class LLMAgent(BaseAgent):
 
 
 # ---------------------------------------------------------------------------
+# Claude Agent SDK agent
+# ---------------------------------------------------------------------------
+
+class ClaudeAgent(BaseAgent):
+    """Agent that uses Anthropic's Claude via the Claude Agent SDK.
+
+    Reads ANTHROPIC_API_KEY from environment. Constructs a prompt from
+    the observation and parses the response JSON into an AdAction.
+    Falls back to a skip action on parse failure.
+
+    Usage requires:
+        pip install claude-agent-sdk
+    and ANTHROPIC_API_KEY set in the environment.
+
+    CLI usage:
+        ANTHROPIC_API_KEY=sk-ant-... python -m meta_ad_optimizer.baseline \\
+            --episodes 5 --seed 42 --claude --claude-model claude-opus-4-6
+    """
+
+    name = "Claude"
+
+    SYSTEM_PROMPT = (
+        "You are an expert ad optimization agent for Instagram and Facebook. "
+        "Given the current user profile, available creatives, and session state, "
+        "decide the best ad action to maximise engagement while managing user fatigue.\n\n"
+        "Respond ONLY with a JSON object — no markdown, no explanation:\n"
+        '{"show_ad": bool, "creative_id": int, "platform": str, '
+        '"placement": str, "ad_format": str}\n\n'
+        "Valid platforms: instagram, facebook.\n"
+        "Instagram surfaces: feed, reels, stories, explore, search.\n"
+        "Facebook surfaces: feed, reels, stories, marketplace, search, right_column.\n"
+        "Valid formats per surface:\n"
+        "  feed: image, video, carousel, reel\n"
+        "  reels: reel\n"
+        "  stories: image, video, reel, collection\n"
+        "  explore: image, video, carousel, reel\n"
+        "  search: image, video\n"
+        "  marketplace: image, carousel, collection\n"
+        "  right_column: image\n"
+        "Match creative target_segment/category to the user for best CTR. "
+        "Skip (show_ad=false) when fatigue > 0.5 to preserve long-term engagement."
+    )
+
+    def __init__(self, model: str = "claude-opus-4-6"):
+        self._model = model
+
+    def _obs_to_prompt(self, obs: AdObservation) -> str:
+        creatives_summary = []
+        for c in obs.available_creatives:
+            creatives_summary.append(
+                f"  idx={c['pool_index']}: category={c['category']}, "
+                f"tone={c['tone']}, target={c['target_segment']}, "
+                f"ctr={c['base_ctr']:.3f}"
+            )
+        return (
+            f"User: segment={obs.user_segment}, "
+            f"interests={obs.user_interests}, device={obs.user_device}\n"
+            f"Platform: {obs.current_platform}, surface: {obs.current_surface}\n"
+            f"Step: {obs.step}/{obs.total_steps}, "
+            f"fatigue: {obs.fatigue_level:.3f}, "
+            f"impressions: {obs.impression_count}\n"
+            f"Session CTR: {obs.session_metrics.get('ctr', 0):.4f}\n"
+            f"Creatives:\n" + "\n".join(creatives_summary) + "\n\n"
+            f"Respond with JSON only."
+        )
+
+    def act(self, obs: AdObservation) -> AdAction:
+        try:
+            import anyio
+            from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+        except ImportError:
+            raise RuntimeError(
+                "claude-agent-sdk and anyio are required for ClaudeAgent. "
+                "Install with: pip install claude-agent-sdk anyio"
+            )
+
+        prompt = self._obs_to_prompt(obs)
+        result_text: str = ""
+
+        async def _run() -> str:
+            async for message in query(
+                prompt=prompt,
+                options=ClaudeAgentOptions(
+                    model=self._model,
+                    system_prompt=self.SYSTEM_PROMPT,
+                    allowed_tools=[],
+                    max_turns=1,
+                    permission_mode="default",
+                ),
+            ):
+                if isinstance(message, ResultMessage):
+                    return message.result or ""
+            return ""
+
+        try:
+            result_text = anyio.run(_run)
+        except Exception:
+            pass
+
+        # Parse the JSON response
+        try:
+            text = result_text.strip()
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(text)
+            return AdAction(
+                show_ad=bool(data.get("show_ad", True)),
+                creative_id=int(data.get("creative_id", 0)),
+                platform=str(data.get("platform", obs.current_platform)),
+                placement=str(data.get("placement", obs.current_surface)),
+                ad_format=str(data.get("ad_format", "image")),
+            )
+        except Exception:
+            platform = obs.current_platform
+            surface = obs.current_surface
+            valid_fmts = VALID_FORMATS.get(surface, ["image"])
+            return AdAction(
+                show_ad=False,
+                creative_id=0,
+                platform=platform,
+                placement=surface,
+                ad_format=valid_fmts[0],
+            )
+
+
+# ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------
 
@@ -321,6 +449,15 @@ def main():
         "--model", type=str, default="gpt-4o-mini",
         help="OpenAI model name for the LLM agent",
     )
+    parser.add_argument(
+        "--claude", action="store_true",
+        help="Include Claude agent (requires ANTHROPIC_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--claude-model", type=str, default="claude-opus-4-6",
+        dest="claude_model",
+        help="Claude model ID for the Claude agent (default: claude-opus-4-6)",
+    )
     args = parser.parse_args()
 
     task_names = ["creative_matcher", "placement_optimizer", "campaign_optimizer"]
@@ -343,6 +480,17 @@ def main():
         agent_names.append("LLM")
         if args.episodes > 10:
             print(f"NOTE: LLM agent is slow/costly. Consider --episodes 5 for LLM runs.\n")
+
+    if args.claude:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            print("ERROR: ANTHROPIC_API_KEY environment variable not set.")
+            print("Set it with: export ANTHROPIC_API_KEY=sk-ant-...")
+            return
+        agents_factories.append(lambda s: ClaudeAgent(model=args.claude_model))
+        agent_names.append("Claude")
+        if args.episodes > 5:
+            print(f"NOTE: Claude agent is slow/costly. Consider --episodes 5 for Claude runs.\n")
 
     print(f"Running {args.episodes} episodes per task (seed={args.seed})\n")
 
