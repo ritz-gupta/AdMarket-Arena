@@ -2,10 +2,10 @@
 Inference Script — Meta Ad Optimizer
 ===================================
 MANDATORY ENV VARS:
-    API_BASE_URL   The API endpoint for the LLM.
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
-    IMAGE_NAME     (optional) Docker image name for the environment.
+    API_BASE_URL       The API endpoint for the LLM.
+    MODEL_NAME         The model identifier to use for inference.
+    HF_TOKEN           Your Hugging Face / API key.
+    LOCAL_IMAGE_NAME   (optional) Docker image name when using from_docker_image().
 
 STDOUT FORMAT:
     [START] task=<task_name> env=<benchmark> model=<model_name>
@@ -25,10 +25,10 @@ from meta_ad_optimizer.server.ad_environment import AdOptimizerEnvironment
 from meta_ad_optimizer.simulation import VALID_FORMATS, VALID_SURFACES
 from meta_ad_optimizer.tasks import TASKS, grade_episode
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or ""
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 BENCHMARK = "meta_ad_optimizer"
 
 TASK_NAMES = ["creative_matcher", "placement_optimizer", "campaign_optimizer"]
@@ -319,7 +319,7 @@ def run_episode(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=15.0)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=15.0)
     env = AdOptimizerEnvironment()
 
     all_scores: Dict[str, List[float]] = {}
