@@ -107,11 +107,20 @@ def obs_to_prompt(obs: AdObservation) -> str:
             f"tone={c['tone']}, target={c['target_segment']}, "
             f"base_ctr={c['base_ctr']:.3f}, base_view={c['base_view_time']:.1f}s"
         )
+    valid_surfaces = VALID_SURFACES.get(obs.current_platform, ["feed"])
+    surface_fmt_info = []
+    for s in valid_surfaces:
+        fmts = VALID_FORMATS.get(s, ["image"])
+        surface_fmt_info.append(f"  {s}: {', '.join(fmts)}")
+
     return (
         f"Task: {obs.task}\n"
         f"User: segment={obs.user_segment}, interests={obs.user_interests}, "
         f"device={obs.user_device}\n"
-        f"Platform: {obs.current_platform}, current surface: {obs.current_surface}\n"
+        f"Platform: {obs.current_platform} (YOU MUST use this platform), "
+        f"current surface: {obs.current_surface}\n"
+        f"Valid surfaces for {obs.current_platform} and their formats:\n"
+        + "\n".join(surface_fmt_info) + "\n"
         f"Step: {obs.step}/{obs.total_steps}, fatigue: {obs.fatigue_level:.3f}, "
         f"impressions: {obs.impression_count}\n"
         f"Session: CTR={obs.session_metrics.get('ctr', 0):.4f}, "
@@ -150,13 +159,14 @@ def get_llm_action(
         if text.startswith("```"):
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         data = json.loads(text)
-        return AdAction(
+        raw_action = AdAction(
             show_ad=bool(data.get("show_ad", True)),
             creative_id=int(data.get("creative_id", 0)),
             platform=str(data.get("platform", obs.current_platform)),
             placement=str(data.get("placement", obs.current_surface)),
             ad_format=str(data.get("ad_format", "image")),
         )
+        return _validate_action(raw_action, obs)
     except Exception:
         return _fallback_action(obs)
 
@@ -190,6 +200,40 @@ def _fallback_action(obs: AdObservation) -> AdAction:
         show_ad=True, creative_id=best_idx,
         platform=obs.current_platform,
         placement=surface, ad_format=fmt,
+    )
+
+
+def _validate_action(action: AdAction, obs: AdObservation) -> AdAction:
+    """Correct invalid platform/surface/format combos from LLM output."""
+    platform = action.platform
+    placement = action.placement
+    ad_format = action.ad_format
+
+    valid_surfaces = VALID_SURFACES.get(platform, [])
+    if not valid_surfaces:
+        platform = obs.current_platform
+        valid_surfaces = VALID_SURFACES.get(platform, ["feed"])
+
+    if placement not in valid_surfaces:
+        placement = obs.current_surface if obs.current_surface in valid_surfaces else valid_surfaces[0]
+
+    valid_fmts = VALID_FORMATS.get(placement, ["image"])
+    if ad_format not in valid_fmts:
+        if "reel" in valid_fmts and placement in ("reels", "stories"):
+            ad_format = "reel"
+        elif "collection" in valid_fmts and placement == "marketplace":
+            ad_format = "collection"
+        else:
+            ad_format = valid_fmts[0]
+
+    creative_id = max(0, min(action.creative_id, len(obs.available_creatives) - 1))
+
+    return AdAction(
+        show_ad=action.show_ad,
+        creative_id=creative_id,
+        platform=platform,
+        placement=placement,
+        ad_format=ad_format,
     )
 
 
