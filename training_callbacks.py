@@ -3,15 +3,10 @@ Shared training observability for AdMarket Arena GRPO runs.
 
 This module owns all observability code so the training notebooks
 (``train_grpo.ipynb`` advertiser, ``train_oversight.ipynb`` oversight)
-stay readable. It is deliberately neutral about *which* run is in
-flight — the same callback works for both as long as the caller passes
-a distinct ``wandb_project`` name.
+stay readable.
 
-Three orthogonal sinks (master Section 6.2):
+Two orthogonal sinks:
 
-  - **Weights & Biases** as the primary live dashboard. Public URL goes
-    in the README + HF model cards. Free tier; no internet at venue is
-    handled via the next two redundant sinks.
   - **Local CSV mirror** at ``logs/training_run_<timestamp>.csv`` with
     one row per logged step. Tamper-evident receipt of training; PNG
     plots are regenerable from this alone via ``scripts/make_plots.py``.
@@ -184,14 +179,13 @@ class BestCheckpointTracker:
 
 @dataclass
 class ArenaTrainingCallback(_TrainerCallback):
-    """TRL TrainerCallback that wires W&B + CSV + JSONL + best-tracker.
+    """TRL TrainerCallback that wires CSV + JSONL + best-tracker.
 
     Reused by both training runs:
 
     Advertiser (Plan 3):
         callback = ArenaTrainingCallback(
             run_name="advertiser_grpo",
-            wandb_project="admarket-arena-advertiser",
             log_dir=Path("logs"),
             checkpoint_root=Path("checkpoints/advertiser_run"),
             episode_dump_every=10,
@@ -202,21 +196,15 @@ class ArenaTrainingCallback(_TrainerCallback):
     Oversight (Plan 2):
         callback = ArenaTrainingCallback(
             run_name="oversight_grpo",
-            wandb_project="admarket-arena-oversight",
             log_dir=Path("logs"),
             checkpoint_root=Path("checkpoints/oversight_run"),
             episode_dump_every=10,
             best_metric_name="val_f1",
             custom_metrics_fn=oversight_validation_metrics,
         )
-
-    The callback never imports wandb at module load time — it imports
-    lazily so a no-internet venue can drop the W&B sink and still keep
-    CSV + JSONL working (matches Section 6.2 redundancy).
     """
 
     run_name: str
-    wandb_project: str
     log_dir: Path
     checkpoint_root: Path
     episode_dump_every: int = 10
@@ -224,14 +212,10 @@ class ArenaTrainingCallback(_TrainerCallback):
     best_metric_name: str = "weekly_roas"
     higher_is_better: bool = True
     custom_metrics_fn: Optional[Callable[[int], Dict[str, Any]]] = None
-    use_wandb: bool = True
-    wandb_config: Dict[str, Any] = field(default_factory=dict)
 
     csv_mirror: Optional[CSVMirror] = None
     episode_dumper: Optional[EpisodeDumper] = None
     best_tracker: Optional[BestCheckpointTracker] = None
-    _wandb_initialized: bool = False
-    _wandb_module: Any = None
     _step_counter: int = 0
     _start_time: float = 0.0
 
@@ -252,40 +236,7 @@ class ArenaTrainingCallback(_TrainerCallback):
         )
         self._start_time = time.time()
 
-    # --- W&B helpers ---
-    def _maybe_init_wandb(self) -> None:
-        if not self.use_wandb or self._wandb_initialized:
-            return
-        try:
-            import wandb  # type: ignore
-            self._wandb_module = wandb
-        except ImportError:
-            self.use_wandb = False
-            return
-        try:
-            wandb.init(
-                project=self.wandb_project,
-                name=self.run_name,
-                config={**self.wandb_config, "run_name": self.run_name},
-                reinit=True,
-            )
-        except Exception:
-            self.use_wandb = False
-            return
-        self._wandb_initialized = True
-
-    def _log_to_wandb(self, metrics: Dict[str, Any]) -> None:
-        if not self.use_wandb or self._wandb_module is None:
-            return
-        try:
-            self._wandb_module.log(metrics)
-        except Exception:
-            pass
-
     # --- TrainerCallback hooks ---
-    def on_train_begin(self, args: Any = None, state: Any = None, control: Any = None, **kwargs: Any) -> None:
-        self._maybe_init_wandb()
-
     def on_log(
         self,
         args: Any = None,
@@ -322,12 +273,8 @@ class ArenaTrainingCallback(_TrainerCallback):
         if self.csv_mirror is not None:
             self.csv_mirror.log_row({k: v for k, v in merged.items() if isinstance(v, (int, float))})
 
-        self._log_to_wandb({k: v for k, v in merged.items() if isinstance(v, (int, float))})
-
         if self.best_tracker is not None:
-            new_best = self.best_tracker.consider(step, {k: v for k, v in merged.items() if isinstance(v, (int, float))})
-            if new_best:
-                self._log_to_wandb({f"best/{self.best_metric_name}": self.best_tracker.best_value, "best/step": step})
+            self.best_tracker.consider(step, {k: v for k, v in merged.items() if isinstance(v, (int, float))})
 
     def on_save(
         self,
@@ -352,19 +299,6 @@ class ArenaTrainingCallback(_TrainerCallback):
         ):
             self.best_tracker.snapshot_from(candidate)
 
-    def on_train_end(
-        self,
-        args: Any = None,
-        state: Any = None,
-        control: Any = None,
-        **kwargs: Any,
-    ) -> None:
-        if self.use_wandb and self._wandb_module is not None:
-            try:
-                self._wandb_module.finish()
-            except Exception:
-                pass
-
     # --- helpers used directly by the training notebook ---
 
     def dump_validation_episode(
@@ -387,7 +321,6 @@ class ArenaTrainingCallback(_TrainerCallback):
 
 def make_arena_callback(
     run_name: str,
-    wandb_project: str,
     *,
     log_dir: str = "logs",
     checkpoint_root: str = "checkpoints",
@@ -396,12 +329,9 @@ def make_arena_callback(
     best_metric_name: str = "weekly_roas",
     higher_is_better: bool = True,
     custom_metrics_fn: Optional[Callable[[int], Dict[str, Any]]] = None,
-    use_wandb: bool = True,
-    wandb_config: Optional[Dict[str, Any]] = None,
 ) -> ArenaTrainingCallback:
     return ArenaTrainingCallback(
         run_name=run_name,
-        wandb_project=wandb_project,
         log_dir=Path(log_dir),
         checkpoint_root=Path(checkpoint_root) / run_name,
         episode_dump_every=episode_dump_every,
@@ -409,6 +339,4 @@ def make_arena_callback(
         best_metric_name=best_metric_name,
         higher_is_better=higher_is_better,
         custom_metrics_fn=custom_metrics_fn,
-        use_wandb=use_wandb,
-        wandb_config=wandb_config or {},
     )

@@ -351,10 +351,8 @@ class TestTrainingCallbacks:
     def test_callback_log_writes_csv(self, tmp_path: Path):
         cb = make_arena_callback(
             run_name="test_run",
-            wandb_project="dummy",
             log_dir=str(tmp_path / "logs"),
             checkpoint_root=str(tmp_path / "ckpts"),
-            use_wandb=False,
         )
         cb.on_log(args=None, state=None, control=None,
                   logs={"loss": 0.5, "weekly_roas": 1.2, "step": 0})
@@ -370,10 +368,8 @@ class TestTrainingCallbacks:
 
         cb = make_arena_callback(
             run_name="t2",
-            wandb_project="dummy",
             log_dir=str(tmp_path / "logs"),
             checkpoint_root=str(tmp_path / "ckpts"),
-            use_wandb=False,
             custom_metrics_fn=custom,
         )
         cb.on_log(args=None, state=None, control=None, logs={"loss": 0.4})
