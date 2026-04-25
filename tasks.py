@@ -80,6 +80,91 @@ DEFAULT_TASK = "campaign_optimizer"
 
 
 # ---------------------------------------------------------------------------
+# AdMarket Arena — Multi-Agent Long-Horizon Campaign Tasks
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ArenaTaskConfig:
+    """Immutable configuration for one Arena difficulty tier."""
+
+    name: str
+    days: int                           # episode length in days (3 / 5 / 7)
+    impressions_per_day: int            # auction slots per day (20 / 30 / 50)
+    n_personas: int                     # number of scripted PersonaBot competitors
+    initial_budget: float               # total weekly spend cap for trained agent
+    daily_budget_cap: float             # soft daily budget (reset each day)
+    floor_price_base: float = 0.50      # base floor price on day 1
+    floor_price_daily_increment: float = 0.10  # floor rises by this each day
+    frequency_cap_per_user: int = 3     # max wins per user per day before exclusion
+    fatigue_increment: float = 0.06     # per-impression fatigue growth
+    fatigue_recovery: float = 0.04      # per-skipped-slot fatigue recovery
+
+    @property
+    def total_steps(self) -> int:
+        return self.days * self.impressions_per_day
+
+
+ARENA_TASKS: Dict[str, ArenaTaskConfig] = {
+    # -----------------------------------------------------------------------
+    # Easy: 3 days × 20 slots = 60 steps, 3 scripted opponents
+    # Designed for fast iteration on Colab free tier (~45s per episode).
+    # Promote when mean reward > 0.30 over 20 episodes.
+    # -----------------------------------------------------------------------
+    "arena_easy": ArenaTaskConfig(
+        name="arena_easy",
+        days=3,
+        impressions_per_day=20,
+        n_personas=3,
+        initial_budget=300.0,
+        daily_budget_cap=100.0,
+        floor_price_base=0.50,
+        floor_price_daily_increment=0.10,
+        frequency_cap_per_user=3,
+        fatigue_increment=0.06,
+        fatigue_recovery=0.04,
+    ),
+    # -----------------------------------------------------------------------
+    # Medium: 5 days × 30 slots = 150 steps, 4 scripted opponents
+    # Promotes long-horizon planning; yesterday_recap starts mattering.
+    # Promote when mean reward > 0.40 over 20 episodes.
+    # -----------------------------------------------------------------------
+    "arena_medium": ArenaTaskConfig(
+        name="arena_medium",
+        days=5,
+        impressions_per_day=30,
+        n_personas=4,
+        initial_budget=500.0,
+        daily_budget_cap=100.0,
+        floor_price_base=0.50,
+        floor_price_daily_increment=0.10,
+        frequency_cap_per_user=3,
+        fatigue_increment=0.06,
+        fatigue_recovery=0.04,
+    ),
+    # -----------------------------------------------------------------------
+    # Hard: 7 days × 50 slots = 350 steps, all 5 PersonaBot personas
+    # Full campaign; WeeklyROASRubric (5.0× weight) dominates.
+    # Target: weekly ROAS ≥ 2.0 with ≥50% budget utilisation.
+    # -----------------------------------------------------------------------
+    "arena_hard": ArenaTaskConfig(
+        name="arena_hard",
+        days=7,
+        impressions_per_day=50,
+        n_personas=5,
+        initial_budget=1000.0,
+        daily_budget_cap=142.86,        # 1000 / 7, exact daily share
+        floor_price_base=0.50,
+        floor_price_daily_increment=0.10,
+        frequency_cap_per_user=3,
+        fatigue_increment=0.06,
+        fatigue_recovery=0.04,
+    ),
+}
+
+DEFAULT_ARENA_TASK = "arena_easy"
+
+
+# ---------------------------------------------------------------------------
 # Grader functions  (each returns 0.0 – 1.0)
 # ---------------------------------------------------------------------------
 

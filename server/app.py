@@ -16,12 +16,15 @@ except Exception as e:
     ) from e
 
 try:
-    from ..models import AdAction, AdObservation
+    from ..models import AdAction, AdObservation, AuctionAction, AuctionObservation
     from .ad_environment import AdOptimizerEnvironment
+    from .arena_env import AdMarketArenaEnvironment
 except ImportError:
-    from models import AdAction, AdObservation
+    from models import AdAction, AdObservation, AuctionAction, AuctionObservation
     from server.ad_environment import AdOptimizerEnvironment
+    from server.arena_env import AdMarketArenaEnvironment
 
+# Original single-agent optimizer
 app = create_app(
     AdOptimizerEnvironment,
     AdAction,
@@ -29,6 +32,16 @@ app = create_app(
     env_name="meta_ad_optimizer",
     max_concurrent_envs=50,
 )
+
+# AdMarket Arena — multi-agent long-horizon auction (Plan 2)
+_arena_app = create_app(
+    AdMarketArenaEnvironment,
+    AuctionAction,
+    AuctionObservation,
+    env_name="meta_ad_optimizer_arena",
+    max_concurrent_envs=50,
+)
+app.mount("/arena", _arena_app)
 
 
 @app.get("/")
@@ -38,6 +51,8 @@ def root():
         "status": "running",
         "endpoints": ["/reset", "/step", "/state", "/health"],
         "tasks": ["creative_matcher", "placement_optimizer", "campaign_optimizer"],
+        "arena_endpoints": ["/arena/reset", "/arena/step", "/arena/state", "/arena/health"],
+        "arena_tasks": ["arena_easy", "arena_medium", "arena_hard"],
     }
 
 

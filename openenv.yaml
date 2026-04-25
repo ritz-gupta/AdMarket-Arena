@@ -4,3 +4,30 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
+
+tasks:
+  # ---- Original single-agent optimizer ----
+  - name: creative_matcher
+    description: "Easy: single-platform creative selection, 10 steps, no fatigue"
+    endpoint: /
+
+  - name: placement_optimizer
+    description: "Medium: placement + skip decisions with fatigue tracking, 15 steps"
+    endpoint: /
+
+  - name: campaign_optimizer
+    description: "Hard: full cross-platform campaign with surface transitions, 20 steps"
+    endpoint: /
+
+  # ---- AdMarket Arena — Multi-Agent Long-Horizon Auction ----
+  - name: arena_easy
+    description: "Arena Easy: 3-day Vickrey auction vs 3 scripted PersonaBots, 60 steps"
+    endpoint: /arena
+
+  - name: arena_medium
+    description: "Arena Medium: 5-day auction vs 4 PersonaBots, daily pacing rewards, 150 steps"
+    endpoint: /arena
+
+  - name: arena_hard
+    description: "Arena Hard: 7-day full campaign vs 5 PersonaBots, weekly ROAS terminal reward, 350 steps"
+    endpoint: /arena

@@ -301,3 +301,123 @@ openenv push
 ## License
 
 BSD 3-Clause License
+
+---
+
+# AdMarket Arena — Multi-Agent Long-Horizon Ad Auction
+
+> **Round 2 upgrade** built on top of the single-agent env above.
+> Targets **Theme 1 (Multi-Agent)** + **Theme 2 (Long-Horizon Planning)**.
+
+## Problem
+
+Real-time bidding is a multi-agent problem: every impression slot is a sealed auction where competing advertisers submit bids simultaneously and the outcome depends on everyone's strategy. A single-agent env can't capture this dynamic. AdMarket Arena puts one trained LLM advertiser against four scripted `PersonaBot` opponents in a 7-day Vickrey (second-price) auction campaign.
+
+The long-horizon challenge: a 7-day, 350-step episode far exceeds any LLM's context window. The agent must learn to plan across days — managing fatigue, pacing budget, and adjusting bids based on multi-day ROAS trends — without access to raw step history.
+
+## Environment
+
+```
+Episode = 7 days × 50 impressions/day = 350 auction steps
+
+Each step:
+  1. User sampled from 100-user pool (repeat exposures → frequency caps matter)
+  2. All 5 advertisers submit bids simultaneously
+  3. Winner = highest bid; pays second-highest (Vickrey / second-price)
+  4. Winner's creative shown → compute_engagement() → click / view / fatigue
+  5. Per-step reward emitted to trained agent (opponents are scripted, no reward)
+  6. Every 50 steps: daily pacing bonus + day recap injected into next observation
+  7. Step 350: weekly ROAS terminal reward (5.0× weight, dominant signal)
+```
+
+### What makes it novel
+
+| Feature | Why it matters |
+|---|---|
+| **Vickrey auction** | Truth-telling equilibrium; agent must learn bid shading against different personas |
+| **5 scripted PersonaBots** with per-episode trait jitter | Agent must generalise across opponent archetypes, not memorise exact bid values |
+| **`yesterday_recap` in observation** | ~200-token LLM-generated day summary; agent plans across 7 days without full history |
+| **Composable rubric system** | PerStep + Daily + Weekly rewards ablatable independently; clean separation of signal horizons |
+| **OversightAgent** (Fleet AI bonus) | Separate model reads auction logs and flags freq-cap / budget / shill-bidding violations |
+
+### Reward decomposition
+
+```
+Per step  (dense):   PerStepEngagementRubric   won+clicked: +(2.0 - price)
+                                                won+no click: -(price × 0.10)
+                                                skipped:      +0.02
+                                                over budget:  -0.50
+Per day   (medium):  DailyPacingRubric          max +0.50  (pacing quality × daily ROAS)
+Per week  (sparse):  WeeklyROASRubric           5.0 × min(1.5, weekly_roas / 2.0)
+                                                overspend penalty: -2.0
+                                                underspend penalty: -2.0
+```
+
+The 5.0× weekly weight is intentionally larger than the sum of all per-step rewards (~35), forcing the agent to treat ROAS as the primary objective.
+
+### Three difficulty tiers
+
+| Task | Days | Slots/day | Steps | Competitors | Budget |
+|---|---|---|---|---|---|
+| `arena_easy` | 3 | 20 | 60 | 3 PersonaBots | $300 |
+| `arena_medium` | 5 | 30 | 150 | 4 PersonaBots | $500 |
+| `arena_hard` | 7 | 50 | 350 | 5 PersonaBots | $1000 |
+
+## Arena Quick Start
+
+```python
+from meta_ad_optimizer.client import AdMarketArenaEnv
+from meta_ad_optimizer.models import AuctionAction
+
+async with AdMarketArenaEnv(base_url="http://localhost:8000") as env:
+    result = await env.reset(task="arena_easy")
+    obs = result.observation
+    print(obs.user_segment, obs.budget_remaining, obs.floor_price)
+
+    # Bid 1.20 CPM on this slot
+    result = await env.step(AuctionAction(skip=False, bid_amount=1.20, creative_id=0))
+    print(result.observation.last_auction_result)
+    print(result.observation.yesterday_recap)  # Theme 2 recap on day boundaries
+```
+
+```bash
+# Run arena baselines (no server required — env runs in-process)
+python -m meta_ad_optimizer.baseline --arena --task arena_easy --episodes 5 --seed 42
+```
+
+Expected output:
+```
+=== AdMarket Arena — arena_easy (5 episodes, seed=42) ===
+  Agent              weekly_roas        reward
+  --------------------------------------------
+  ArenaRandom           0.XXX±0.XXX    XX.XX   ← placeholder
+  ArenaGreedy           0.XXX±0.XXX    XX.XX   ← placeholder
+  ArenaPacing           0.XXX±0.XXX    XX.XX   ← placeholder
+
+  Ordering check (pacing >= greedy >= random): PASS
+```
+
+## Arena Baselines (placeholder — Plan 4 fills real numbers)
+
+| Agent | arena_easy ROAS | arena_hard ROAS | Notes |
+|---|---|---|---|
+| ArenaRandom | — | — | Random bids, 20% skip rate |
+| ArenaGreedy | — | — | Always bids 5.0; ignores fatigue |
+| ArenaPacing | — | — | Budget-proportional bids; skips fatigued segments |
+| LLM (trained) | — | — | Qwen2.5-3B fine-tuned with GRPO |
+
+## Training (GRPO on Colab T4)
+
+```python
+# See train_grpo.ipynb — Plan 3 fills this
+# Model: Qwen/Qwen2.5-3B-Instruct, 4-bit via Unsloth
+# Curriculum: arena_easy (60 steps) → arena_medium → arena_hard (350 steps)
+# Expected: ~2–4 hours on Colab free T4 for arena_easy convergence
+```
+
+## Links (placeholder — Plan 4 fills)
+
+- HuggingFace Space: `[YOUR_HF_SPACE_URL]`
+- Trained checkpoint: `[YOUR_HF_MODEL_URL]`
+- Demo video: `[DEMO_URL]`
+- Blog post: `[BLOG_URL]`
