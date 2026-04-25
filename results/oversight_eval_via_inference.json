@@ -1,0 +1,39 @@
+{
+  "results": {
+    "standard": {
+      "heuristic": {
+        "agent": "heuristic",
+        "n_episodes": 30,
+        "n_day_records": 210,
+        "weekly_mean_f1": 0.46234728234728234,
+        "weekly_mean_precision": 0.3425661375661376,
+        "weekly_mean_recall": 0.7666666666666667,
+        "daily_mean_f1": 0.626485260770975,
+        "pooled_f1": 1.0,
+        "pooled_precision": 1.0,
+        "pooled_recall": 1.0,
+        "pooled_tp": 12,
+        "pooled_fp": 0,
+        "pooled_fn": 0
+      }
+    },
+    "adversarial": {
+      "heuristic": {
+        "agent": "heuristic",
+        "n_episodes": 30,
+        "n_day_records": 210,
+        "weekly_mean_f1": 0.30368446368446367,
+        "weekly_mean_precision": 0.19710317460317459,
+        "weekly_mean_recall": 0.7333333333333333,
+        "daily_mean_f1": 0.5046031746031746,
+        "pooled_f1": 0.7368421052631579,
+        "pooled_precision": 0.5833333333333334,
+        "pooled_recall": 1.0,
+        "pooled_tp": 7,
+        "pooled_fp": 5,
+        "pooled_fn": 0
+      }
+    }
+  },
+  "markdown_table": "| Tier | Agent | Weekly F1 | Precision | Recall | FP | FN |\n|------|-------|-----------|-----------|--------|----|----|\n| standard | heuristic | 0.462 | 0.343 | 0.767 | 0 | 0 |\n| adversarial | heuristic | 0.304 | 0.197 | 0.733 | 5 | 0 |"
+}

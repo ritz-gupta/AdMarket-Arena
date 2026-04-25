@@ -1,8 +1,20 @@
 """
 Task definitions and grader functions for the Meta Ad Optimizer.
 
-Three difficulty tiers, each with its own action-space constraints
-and a grader that returns a normalised 0.0-1.0 score.
+Three Round 1 difficulty tiers (creative_matcher / placement_optimizer /
+campaign_optimizer) plus three AdMarket Arena tiers (arena_easy /
+arena_medium / arena_hard). The arena tiers follow master plan
+Section 3.1.1 verbatim and are consumed by:
+
+  - ``server/arena_env.py`` (Plan 1) — reads ``initial_budget``,
+    ``daily_budget_cap``, ``total_steps``, ``fatigue_increment``,
+    ``fatigue_recovery``, ``frequency_cap_per_user``.
+  - ``scripts/advertiser_eval.py`` + ``train_grpo.ipynb`` (Plan 3) —
+    read ``weekly_budget``, ``daily_budget``, ``steps_per_episode``,
+    ``target_weekly_roas``.
+
+To keep both consumers happy, ``ArenaTaskConfig`` carries Plan 1's field
+names as canonical and exposes Plan 3's names as ``@property`` aliases.
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ except ImportError:
 
 @dataclass(frozen=True)
 class TaskConfig:
-    """Immutable configuration for a single task difficulty level."""
+    """Immutable configuration for a single Round 1 task difficulty level."""
 
     name: str
     steps_per_episode: int
@@ -30,7 +42,6 @@ class TaskConfig:
     fatigue_recovery: float
     surface_transitions: bool     # whether user drifts between surfaces
 
-    # For easy task: fix these values so agent only picks creative_id
     fixed_platform: Optional[str] = None
     fixed_surface: Optional[str] = None
     fixed_format: Optional[str] = None
@@ -80,36 +91,62 @@ DEFAULT_TASK = "campaign_optimizer"
 
 
 # ---------------------------------------------------------------------------
-# AdMarket Arena — Multi-Agent Long-Horizon Campaign Tasks
+# AdMarket Arena (Round 2) — multi-advertiser auction tasks
 # ---------------------------------------------------------------------------
+#
+# Per master plan Section 3.1.1. Curriculum scheduler
+# (``curriculum_scheduler.py``) promotes advertiser training
+# arena_easy -> arena_medium -> arena_hard when mean episode reward
+# > 0.30 for 10 consecutive rollouts. arena_easy doubles as the fast
+# smoke-test target (~2 min/episode on T4 vs ~5 min for arena_hard) so
+# the GRPO pipeline can be validated in 30 min before committing 4 hours
+# to arena_hard training.
 
 @dataclass(frozen=True)
 class ArenaTaskConfig:
-    """Immutable configuration for one Arena difficulty tier."""
+    """Immutable configuration for one AdMarket Arena difficulty tier.
+
+    Field naming follows Plan 1 (``initial_budget``, ``daily_budget_cap``,
+    ``total_steps``) because ``server/arena_env.py`` constructs the env
+    against these names. Plan 3 modules access the same values through
+    aliased ``@property`` accessors (``weekly_budget``, ``daily_budget``,
+    ``steps_per_episode``).
+    """
 
     name: str
-    days: int                           # episode length in days (3 / 5 / 7)
-    impressions_per_day: int            # auction slots per day (20 / 30 / 50)
-    n_personas: int                     # number of scripted PersonaBot competitors
-    initial_budget: float               # total weekly spend cap for trained agent
-    daily_budget_cap: float             # soft daily budget (reset each day)
-    floor_price_base: float = 0.50      # base floor price on day 1
+    days: int                                  # episode length in days (3 / 5 / 7)
+    impressions_per_day: int                   # auction slots per day (20 / 30 / 50)
+    n_personas: int                            # number of scripted PersonaBot competitors
+    initial_budget: float                      # total weekly spend cap for trained agent
+    daily_budget_cap: float                    # soft daily budget (reset each day)
+    floor_price_base: float = 0.50             # base floor price on day 1
     floor_price_daily_increment: float = 0.10  # floor rises by this each day
-    frequency_cap_per_user: int = 3     # max wins per user per day before exclusion
-    fatigue_increment: float = 0.06     # per-impression fatigue growth
-    fatigue_recovery: float = 0.04      # per-skipped-slot fatigue recovery
+    frequency_cap_per_user: int = 3            # max wins per user per day before exclusion
+    fatigue_increment: float = 0.06            # per-impression fatigue growth
+    fatigue_recovery: float = 0.04             # per-skipped-slot fatigue recovery
+    target_weekly_roas: float = 2.0            # KPI used by reward + Plan 3 eval
+    persona_jitter: bool = True                # per-episode trait jitter on opponents
 
     @property
     def total_steps(self) -> int:
         return self.days * self.impressions_per_day
 
+    # --- Plan 3 aliases (keep both naming conventions working) ---
+
+    @property
+    def steps_per_episode(self) -> int:
+        return self.total_steps
+
+    @property
+    def weekly_budget(self) -> float:
+        return self.initial_budget
+
+    @property
+    def daily_budget(self) -> float:
+        return self.daily_budget_cap
+
 
 ARENA_TASKS: Dict[str, ArenaTaskConfig] = {
-    # -----------------------------------------------------------------------
-    # Easy: 3 days × 20 slots = 60 steps, 3 scripted opponents
-    # Designed for fast iteration on Colab free tier (~45s per episode).
-    # Promote when mean reward > 0.30 over 20 episodes.
-    # -----------------------------------------------------------------------
     "arena_easy": ArenaTaskConfig(
         name="arena_easy",
         days=3,
@@ -117,17 +154,14 @@ ARENA_TASKS: Dict[str, ArenaTaskConfig] = {
         n_personas=3,
         initial_budget=300.0,
         daily_budget_cap=100.0,
-        floor_price_base=0.50,
-        floor_price_daily_increment=0.10,
-        frequency_cap_per_user=3,
+        floor_price_base=0.0,
+        floor_price_daily_increment=0.0,
+        frequency_cap_per_user=999,
         fatigue_increment=0.06,
         fatigue_recovery=0.04,
+        target_weekly_roas=1.5,
+        persona_jitter=False,
     ),
-    # -----------------------------------------------------------------------
-    # Medium: 5 days × 30 slots = 150 steps, 4 scripted opponents
-    # Promotes long-horizon planning; yesterday_recap starts mattering.
-    # Promote when mean reward > 0.40 over 20 episodes.
-    # -----------------------------------------------------------------------
     "arena_medium": ArenaTaskConfig(
         name="arena_medium",
         days=5,
@@ -135,29 +169,28 @@ ARENA_TASKS: Dict[str, ArenaTaskConfig] = {
         n_personas=4,
         initial_budget=500.0,
         daily_budget_cap=100.0,
-        floor_price_base=0.50,
-        floor_price_daily_increment=0.10,
-        frequency_cap_per_user=3,
+        floor_price_base=0.25,
+        floor_price_daily_increment=0.05,
+        frequency_cap_per_user=5,
         fatigue_increment=0.06,
         fatigue_recovery=0.04,
+        target_weekly_roas=1.75,
+        persona_jitter=True,
     ),
-    # -----------------------------------------------------------------------
-    # Hard: 7 days × 50 slots = 350 steps, all 5 PersonaBot personas
-    # Full campaign; WeeklyROASRubric (5.0× weight) dominates.
-    # Target: weekly ROAS ≥ 2.0 with ≥50% budget utilisation.
-    # -----------------------------------------------------------------------
     "arena_hard": ArenaTaskConfig(
         name="arena_hard",
         days=7,
         impressions_per_day=50,
         n_personas=5,
         initial_budget=1000.0,
-        daily_budget_cap=142.86,        # 1000 / 7, exact daily share
+        daily_budget_cap=143.0,
         floor_price_base=0.50,
         floor_price_daily_increment=0.10,
         frequency_cap_per_user=3,
         fatigue_increment=0.06,
         fatigue_recovery=0.04,
+        target_weekly_roas=2.0,
+        persona_jitter=True,
     ),
 }
 
