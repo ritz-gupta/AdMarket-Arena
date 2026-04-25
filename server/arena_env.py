@@ -120,7 +120,29 @@ class AdMarketArenaEnvironment(Environment):
         self._yesterday_recap: str = ""
         self._last_auction_result: Optional[AuctionResultModel] = None
 
+        # Recap ablation knob — defaults to 'full' for production behavior.
+        # Set via set_recap_mode() before reset() to test long-horizon claim.
+        self._recap_mode: str = "full"
+
         self._arena_state: ArenaState = ArenaState(episode_id=str(uuid4()), step_count=0)
+
+    def set_recap_mode(self, mode: str) -> None:
+        """Change the yesterday_recap content variant for ablation studies.
+
+        Valid modes are defined in ``summarizer.RECAP_MODES``:
+          full | no_recap | stats_only | leak_only | numbers_shuffled
+
+        Tests whether the trained agent's long-horizon performance comes
+        from genuine cross-day reasoning or from leaky pre-computed hints
+        in the recap. See scripts/recap_ablation.py.
+        """
+        try:
+            from ..summarizer import RECAP_MODES
+        except ImportError:
+            from summarizer import RECAP_MODES  # type: ignore[no-redef]
+        if mode not in RECAP_MODES:
+            raise ValueError(f"Unknown recap mode {mode!r}. Valid: {RECAP_MODES}")
+        self._recap_mode = mode
 
     # ------------------------------------------------------------------
     # reset
@@ -365,6 +387,7 @@ class AdMarketArenaEnvironment(Environment):
                 state=trained,
                 auction_log=self._day_auction_log,
                 total_steps=cfg.total_steps,
+                mode=self._recap_mode,
             )
 
             trained.reset_day()
@@ -439,21 +462,42 @@ class AdMarketArenaEnvironment(Environment):
             for c in self._creative_pool
         ]
 
+        weekly_remaining = round(max(0.0, trained.weekly_budget - trained.spent_total), 4)
+        daily_remaining = round(max(0.0, trained.daily_budget - trained.spent_today), 4)
+
+        user_interests: List[str] = []
+        current_surface = "feed"
+        if self._current_user_profile is not None:
+            user_interests = list(getattr(self._current_user_profile, "interests", []) or [])
+            current_surface = getattr(self._current_user_profile, "starting_surface", "feed") or "feed"
+
         return AuctionObservation(
             task=cfg.name,
             advertiser_id=_TRAINED_ID,
             campaign_objective=trained.objective_type,
             day_number=day_number,
+            day_of_week=max(0, min(6, day_number - 1)),
             step_in_day=step_in_day,
             step=self._global_step,
             total_steps=cfg.total_steps,
             # Show the user for the UPCOMING slot (pre-sampled at end of last step)
             user_segment=self._current_user_profile.segment if self._current_user_profile else "",
+            user_interests=user_interests,
             user_id=self._current_user_id,
+            current_surface=current_surface,
             available_creatives=pool_dicts,
             weekly_budget=cfg.initial_budget,
-            budget_remaining=round(max(0.0, trained.weekly_budget - trained.spent_total), 4),
-            daily_budget_remaining=round(max(0.0, trained.daily_budget - trained.spent_today), 4),
+            budget_remaining=weekly_remaining,
+            # Plan 3 alias fields — kept in sync with the Plan 1 names above so
+            # consumers (notebook prompt formatter, tests) can use either set.
+            weekly_budget_remaining=weekly_remaining,
+            daily_budget_remaining=daily_remaining,
+            spent_so_far_today=round(trained.spent_today, 4),
+            spent_so_far_week=round(trained.spent_total, 4),
+            clicks_today=int(trained.clicks_today),
+            clicks_week=int(trained.clicks_total),
+            target_weekly_roas=cfg.target_weekly_roas,
+            frequency_cap_per_user=cfg.frequency_cap_per_user,
             recent_clearing_prices=list(self._recent_clearing_prices),
             floor_price=round(floor_price, 2),
             last_auction_result=self._last_auction_result,

@@ -19,24 +19,43 @@ import json
 import math
 import os
 import random
+import re
 import statistics
 from typing import Any, Dict, List, Optional
 
-from .models import AdAction, AdObservation
-from .server.ad_environment import AdOptimizerEnvironment
-from .simulation import (
-    SEGMENT_CATEGORY_AFFINITY,
-    VALID_FORMATS,
-    VALID_SURFACES,
-    FORMAT_SURFACE_SYNERGY,
-)
-from .tasks import TASKS, grade_episode
+try:
+    from .models import AdAction, AdObservation
+    from .server.ad_environment import AdOptimizerEnvironment
+    from .simulation import (
+        SEGMENT_CATEGORY_AFFINITY,
+        VALID_FORMATS,
+        VALID_SURFACES,
+        FORMAT_SURFACE_SYNERGY,
+    )
+    from .tasks import TASKS, grade_episode
+except ImportError:
+    # Allow `from baseline import ...` when the repo root is on sys.path
+    # (e.g. Colab notebooks that don't install the package).
+    from models import AdAction, AdObservation  # type: ignore[no-redef]
+    from server.ad_environment import AdOptimizerEnvironment  # type: ignore[no-redef]
+    from simulation import (  # type: ignore[no-redef]
+        SEGMENT_CATEGORY_AFFINITY,
+        VALID_FORMATS,
+        VALID_SURFACES,
+        FORMAT_SURFACE_SYNERGY,
+    )
+    from tasks import TASKS, grade_episode  # type: ignore[no-redef]
 
 # Arena imports — optional so single-agent baseline still works without arena modules
 try:
-    from .models import AuctionAction, AuctionObservation
-    from .server.arena_env import AdMarketArenaEnvironment
-    from .tasks import ARENA_TASKS
+    try:
+        from .models import AuctionAction, AuctionObservation
+        from .server.arena_env import AdMarketArenaEnvironment
+        from .tasks import ARENA_TASKS
+    except ImportError:
+        from models import AuctionAction, AuctionObservation  # type: ignore[no-redef]
+        from server.arena_env import AdMarketArenaEnvironment  # type: ignore[no-redef]
+        from tasks import ARENA_TASKS  # type: ignore[no-redef]
     _ARENA_AVAILABLE = True
 except ImportError:
     _ARENA_AVAILABLE = False
@@ -541,6 +560,80 @@ class ArenaPacingAgent(ArenaBaseAgent):
                 best_score = score
                 best_idx = i
         return best_idx
+
+
+class ArenaRecapFollowerBot(ArenaBaseAgent):
+    """Naive hint-following bidder that uses ONLY the yesterday_recap text.
+
+    Built to operationalise the doubt: *"Is yesterday_recap doing the
+    long-horizon work, or is it just leaking the optimal pacing answer?"*
+    If a hand-coded regex parser of the recap can hit competitive ROAS,
+    then a trained LLM that beats this bot is doing genuine planning.
+    If trained-LLM ≈ this bot, the recap is the entire signal.
+
+    Decision rule (no other obs fields used apart from minimal scaffolding):
+      1. Parse "Weekly remaining: $X over Y day(s)" → daily_share = X/(Y+1).
+      2. Parse "Market range: ... avg $Z" → bid = clip(Z * 1.05, floor, 5.0).
+      3. Parse "Fatigue: <seg>=<val>, ..." → if current segment > 0.7, skip.
+      4. Fallback when recap is empty / no_recap mode: bid = 1.0, no skip.
+
+    Reads ``obs.user_segment`` for fatigue lookup, ``obs.floor_price`` for
+    the bid floor (env-imposed, not part of the recap), and
+    ``obs.recent_clearing_prices`` only as a fallback when no market line
+    is present in the recap. Everything else comes from the recap text.
+    """
+
+    name = "ArenaRecapFollower"
+
+    _BUDGET_RE = re.compile(
+        r"Weekly remaining:\s*\$([0-9]+(?:\.[0-9]+)?)\s+over\s+([0-9]+)\s+day"
+    )
+    _MARKET_RE = re.compile(
+        r"Market range:.*?avg\s*\$([0-9]+(?:\.[0-9]+)?)"
+    )
+    _FATIGUE_RE = re.compile(
+        r"([a-z_]+)=([0-9]+(?:\.[0-9]+)?)"
+    )
+    _FATIGUE_SKIP_THRESHOLD = 0.70
+
+    def act(self, obs: "AuctionObservation") -> "AuctionAction":  # type: ignore[name-defined]
+        recap = obs.yesterday_recap or ""
+
+        # Derive fatigue map from recap text only
+        fatigue_map: Dict[str, float] = {}
+        if "Fatigue:" in recap:
+            tail = recap.split("Fatigue:", 1)[1].split("\n", 1)[0]
+            for seg, val in self._FATIGUE_RE.findall(tail):
+                try:
+                    fatigue_map[seg] = float(val)
+                except ValueError:
+                    pass
+
+        if obs.user_segment in fatigue_map and fatigue_map[obs.user_segment] > self._FATIGUE_SKIP_THRESHOLD:
+            return AuctionAction(skip=True, bid_amount=0.0, creative_id=0)
+
+        # Derive bid from market line
+        market_match = self._MARKET_RE.search(recap)
+        if market_match:
+            bid = float(market_match.group(1)) * 1.05
+        elif obs.recent_clearing_prices:
+            bid = (sum(obs.recent_clearing_prices) / len(obs.recent_clearing_prices)) * 1.05
+        else:
+            bid = 1.0
+
+        # Sanity-check against the leaky budget hint: don't exceed what
+        # the recap implies is "today's fair share" (X / (days_left + 1)).
+        budget_match = self._BUDGET_RE.search(recap)
+        if budget_match:
+            weekly_remaining = float(budget_match.group(1))
+            days_left = int(budget_match.group(2))
+            slots_left_today = max(1, getattr(obs, "total_steps", 60) // max(1, 7) - getattr(obs, "step_in_day", 0))
+            daily_share = weekly_remaining / max(1, days_left + 1)
+            per_slot_share = daily_share / slots_left_today
+            bid = min(bid, per_slot_share * 1.5)
+
+        bid = max(obs.floor_price, min(5.0, bid))
+        return AuctionAction(skip=False, bid_amount=round(bid, 4), creative_id=0)
 
 
 class ArenaLLMBidder(ArenaBaseAgent):

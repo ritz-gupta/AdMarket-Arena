@@ -1,0 +1,99 @@
+{
+  "task": "arena_easy",
+  "episodes_per_cell": 5,
+  "seed": 42,
+  "policy_under_test": "recap_follower",
+  "recap_modes": [
+    "full",
+    "no_recap",
+    "stats_only",
+    "leak_only",
+    "numbers_shuffled"
+  ],
+  "wall_clock_seconds": 0.12,
+  "part_a_recap_ablation": {
+    "full": {
+      "label": "full",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2191,
+      "weekly_roas_std": 0.2288,
+      "reward_mean": -0.4536,
+      "reward_std": 6.1007,
+      "skip_rate_mean": 0.0
+    },
+    "no_recap": {
+      "label": "no_recap",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2823,
+      "weekly_roas_std": 0.2032,
+      "reward_mean": 0.9444,
+      "reward_std": 4.8188,
+      "skip_rate_mean": 0.0
+    },
+    "stats_only": {
+      "label": "stats_only",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2823,
+      "weekly_roas_std": 0.2032,
+      "reward_mean": 0.9444,
+      "reward_std": 4.8188,
+      "skip_rate_mean": 0.0
+    },
+    "leak_only": {
+      "label": "leak_only",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2191,
+      "weekly_roas_std": 0.2288,
+      "reward_mean": -0.4536,
+      "reward_std": 6.1007,
+      "skip_rate_mean": 0.0
+    },
+    "numbers_shuffled": {
+      "label": "numbers_shuffled",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2459,
+      "weekly_roas_std": 0.221,
+      "reward_mean": 0.0709,
+      "reward_std": 5.9325,
+      "skip_rate_mean": 0.0
+    }
+  },
+  "part_b_hint_follower_benchmark": {
+    "ArenaRandom": {
+      "label": "ArenaRandom",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.1673,
+      "weekly_roas_std": 0.0399,
+      "reward_mean": -2.3844,
+      "reward_std": 1.7893,
+      "skip_rate_mean": 0.2067
+    },
+    "ArenaGreedy": {
+      "label": "ArenaGreedy",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2639,
+      "weekly_roas_std": 0.0606,
+      "reward_mean": -1.2967,
+      "reward_std": 5.0832,
+      "skip_rate_mean": 0.0
+    },
+    "ArenaPacing": {
+      "label": "ArenaPacing",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.5272,
+      "weekly_roas_std": 0.0813,
+      "reward_mean": 9.1003,
+      "reward_std": 7.2494,
+      "skip_rate_mean": 0.03
+    },
+    "ArenaRecapFollower": {
+      "label": "ArenaRecapFollower",
+      "n_episodes": 5,
+      "weekly_roas_mean": 0.2191,
+      "weekly_roas_std": 0.2288,
+      "reward_mean": -0.4536,
+      "reward_std": 6.1007,
+      "skip_rate_mean": 0.0
+    }
+  }
+}
