@@ -87,18 +87,28 @@ class AdEnv(EnvClient[AdAction, AdObservation, AdState]):
 class AdMarketArenaEnv(EnvClient[AuctionAction, AuctionObservation, ArenaState]):
     """Client for AdMarket Arena — the multi-agent long-horizon ad auction env.
 
-    Connects to the /arena route served by server/arena_env.py.
+    Connects to the ``/arena`` route served by ``server/arena_env.py``.
+    The arena env is mounted as a sub-app on the same FastAPI server that
+    hosts the single-agent ``AdEnv`` at ``/`` — so the ``base_url`` MUST
+    include the ``/arena`` suffix.
+
     Trained advertiser submits one AuctionAction per step; the env runs
-    the full Vickrey auction against 4 scripted PersonaBots and returns
+    the full Vickrey auction against scripted PersonaBots and returns
     an AuctionObservation with the outcome and next slot's user context.
 
-    Example (async):
-        >>> async with AdMarketArenaEnv(base_url="http://localhost:8000") as env:
+    Example (async, deployed HF Space):
+        >>> async with AdMarketArenaEnv(
+        ...     base_url="https://ritz-gupta-meta-ad-optimizer.hf.space/arena"
+        ... ) as env:
         ...     result = await env.reset(task="arena_easy")
         ...     obs = result.observation
         ...     print(obs.user_segment, obs.budget_remaining)
         ...     result = await env.step(AuctionAction(skip=False, bid_amount=1.5, creative_id=0))
         ...     print(result.observation.last_auction_result)
+
+    Example (async, local):
+        >>> async with AdMarketArenaEnv(base_url="http://localhost:8000/arena") as env:
+        ...     result = await env.reset(task="arena_easy")
     """
 
     def _step_payload(self, action: AuctionAction) -> Dict:

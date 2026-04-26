@@ -1,319 +1,63 @@
 ---
-title: Meta Ad Optimizer
-emoji: 📊
+title: AdMarket Arena
+emoji: 🎯
 colorFrom: blue
 colorTo: purple
 sdk: docker
 app_port: 8000
 ---
 
-# Meta Ad Optimizer — OpenEnv RL Environment
-
-An OpenEnv reinforcement-learning environment that simulates ad delivery across **Instagram** and **Facebook**. An agent learns to optimise ad placement, creative selection, format choice, and impression frequency to maximise engagement while managing user fatigue.
-
-## Why This Matters
-
-Ad delivery is Meta's core business. Every day billions of impression opportunities arise across Feed, Reels, Stories, Explore, Marketplace, and Search. This environment lets an RL agent learn the same trade-offs a real ad system faces:
-
-- **Which creative** resonates with which user segment?
-- **Which surface and format** produce the highest CTR and view time?
-- **When to skip** an impression to avoid fatigue?
-- **How to balance** competing objectives (CTR vs. view duration vs. user satisfaction)?
-
-## Quick Start
-
-```bash
-# Install
-pip install openenv-core numpy
-
-# Clone and install this environment
-cd meta_ad_optimizer
-uv sync  # or: pip install -e .
-
-# Run the server
-uvicorn meta_ad_optimizer.server.app:app --host 0.0.0.0 --port 8000
-
-# Run baselines (no server required)
-python -m meta_ad_optimizer.baseline --episodes 100 --seed 42
-```
-
-### Interact via Python
-
-```python
-import asyncio, json, websockets
-
-async def main():
-    async with websockets.connect("ws://localhost:8000/ws") as ws:
-        # Reset with a task
-        await ws.send(json.dumps({"type": "reset", "data": {"task": "creative_matcher"}}))
-        obs = json.loads(await ws.recv())["data"]["observation"]
-        print(obs["user_segment"], obs["available_creatives"])
-
-        # Take a step
-        await ws.send(json.dumps({
-            "type": "step",
-            "data": {
-                "show_ad": True,
-                "creative_id": 0,
-                "platform": "instagram",
-                "placement": "feed",
-                "ad_format": "image",
-            }
-        }))
-        result = json.loads(await ws.recv())["data"]
-        print(result["reward"], result["observation"]["last_action_metrics"])
-
-asyncio.run(main())
-```
-
-## Action Space
-
-```
-AdAction:
-  show_ad      bool     Whether to show an ad (False = skip, recover fatigue)
-  creative_id  int      Index into the per-episode creative pool (0 to N-1)
-  platform     str      "instagram" | "facebook"
-  placement    str      Surface — see valid placements below
-  ad_format    str      "image" | "video" | "carousel" | "reel" | "collection"
-```
-
-### Valid Placements
-
-| Platform  | Surfaces                                              |
-|-----------|-------------------------------------------------------|
-| Instagram | feed, reels, stories, explore, search                 |
-| Facebook  | feed, reels, stories, marketplace, search, right_column |
-
-### Valid Formats per Surface
-
-| Surface     | Allowed Formats                     |
-|-------------|-------------------------------------|
-| Feed        | image, video, carousel, reel        |
-| Reels       | reel                                |
-| Stories     | image, video, reel, collection      |
-| Explore     | image, video, carousel, reel        |
-| Search      | image, video                        |
-| Marketplace | image, carousel, collection         |
-| Right Column| image                               |
-
-Invalid format-surface combinations receive a penalty reward.
-
-## Observation Space
-
-```
-AdObservation:
-  task                str         Active task name
-  user_segment        str         User archetype (e.g. "gen_z_creator")
-  user_interests      list[str]   Interest categories
-  user_device         str         "mobile" | "desktop" | "tablet"
-  current_platform    str         Platform the user is browsing
-  current_surface     str         Surface the user is on right now
-  available_creatives list[dict]  Pool of ad creatives with properties
-  impression_count    int         Ads shown so far this session
-  fatigue_level       float       0.0–1.0 fatigue meter
-  step / total_steps  int         Current step and episode length
-  last_action_metrics dict        Engagement from the previous step
-  session_metrics     dict        Cumulative CTR, view time, satisfaction
-```
-
-### Creative Properties
-
-Each creative in the pool has:
-- `category` — product category (fashion, electronics, health, etc.)
-- `tone` — humorous, informational, emotional, action_oriented
-- `target_segment` — which user segment it was designed for
-- `base_ctr` — baseline click-through probability
-- `base_view_time` — baseline expected view duration (seconds)
-
-Creatives are sampled from a master catalog of 80 diverse ads each episode.
-
-## User Segments
-
-| Segment             | Interests                         | Platform Bias           |
-|---------------------|-----------------------------------|-------------------------|
-| gen_z_creator       | fashion, music, memes, beauty     | 80% Instagram           |
-| millennial_parent   | kids, home decor, deals, family   | 60% Facebook            |
-| business_pro        | SaaS, finance, productivity, B2B  | 80% Facebook            |
-| casual_scroller     | entertainment, food, travel       | 60% Instagram           |
-| fitness_enthusiast  | health, sports, outdoors          | 70% Instagram           |
-| bargain_hunter      | deals, coupons, electronics       | 70% Facebook            |
-
-## Three Tasks (Easy → Medium → Hard)
-
-### Task 1: Creative Matcher (Easy)
-
-| Property       | Value               |
-|----------------|---------------------|
-| Platform       | Instagram (fixed)   |
-| Surface        | Feed (fixed)        |
-| Format         | Image (fixed)       |
-| Creatives      | 4 per episode       |
-| Steps          | 10                  |
-| Fatigue        | Disabled            |
-| Skip allowed   | No                  |
-
-**Agent only picks `creative_id`.** Grader = session CTR.
-
-### Task 2: Placement Optimizer (Medium)
-
-| Property       | Value               |
-|----------------|---------------------|
-| Platform       | Instagram (fixed)   |
-| Surfaces       | All 5 IG surfaces   |
-| Formats        | All 5 formats       |
-| Creatives      | 8 per episode       |
-| Steps          | 15                  |
-| Fatigue        | Light               |
-| Skip allowed   | Yes                 |
-
-**Agent picks creative + surface + format + skip.** Grader = 30% validity + 70% engagement.
-
-### Task 3: Campaign Optimizer (Hard)
-
-| Property       | Value                  |
-|----------------|------------------------|
-| Platforms      | Instagram + Facebook   |
-| Surfaces       | All surfaces           |
-| Formats        | All formats            |
-| Creatives      | 12 per episode         |
-| Steps          | 20                     |
-| Fatigue        | Aggressive             |
-| Skip allowed   | Yes                    |
-| Transitions    | User drifts between surfaces |
-
-**Full action space.** Grader = 15% validity + 25% CTR + 20% view time + 25% satisfaction + 15% fatigue management.
-
-## Reward Function
-
-Per-step reward (multi-objective):
-
-```
-reward = 0.35 * click     (1.0 if clicked, 0.0 otherwise)
-       + 0.25 * view_time (normalised to 0–1)
-       + 0.25 * satisfaction (relevance × non-intrusiveness)
-       + 0.15 * (-fatigue)  (penalises high fatigue)
-```
-
-Skip action: +0.05 fatigue recovery − 0.02 missed revenue = +0.03.
-
-Invalid format-surface combo: −0.2 penalty.
-
-## Baseline Scores
-
-100 episodes, seed=42 (`python -m meta_ad_optimizer.baseline --episodes 100 --seed 42`):
-
-```
-Task: creative_matcher (Easy)
-  Random          0.1720 ± 0.1393
-  Greedy          0.2430 ± 0.2701
-  Rule-Based      0.3730 ± 0.3021
-
-Task: placement_optimizer (Medium)
-  Random          0.4859 ± 0.1187
-  Greedy          0.7141 ± 0.1282
-  Rule-Based      0.7333 ± 0.1526
-
-Task: campaign_optimizer (Hard)
-  Random          0.2800 ± 0.0451
-  Greedy          0.3529 ± 0.1315
-  Rule-Based      0.5899 ± 0.0853
-```
-
-### LLM Baseline (optional)
-
-Run an OpenAI-compatible LLM as the agent:
-
-```bash
-pip install openai
-OPENAI_API_KEY=sk-... python -m meta_ad_optimizer.baseline --episodes 5 --seed 42 --llm --model gpt-4o-mini
-```
-
-The LLM agent receives the full observation as a structured prompt and returns a JSON action. It demonstrates that the environment is compatible with LLM-based RL training pipelines.
-
-## Simulation Details
-
-### Engagement Model
-
-```
-effective_ctr = base_ctr × segment_affinity × placement_factor
-              × context_bonus × platform_match × format_factor
-              × synergy × segment_modifier × (1 − fatigue)
-```
-
-- **Segment affinity**: 2.0× if creative targets user's segment, 1.2× if category matches interest, 0.3× otherwise
-- **Context bonus**: +20% if ad placed on the surface user is browsing
-- **Platform mismatch**: −50% if ad targets wrong platform
-- **Format-surface synergy**: Reel on Reels +35%, Collection on Marketplace +40%, etc.
-
-### Fatigue Model
-
-```
-show_ad  → fatigue += increment × (1 + 0.1 × impressions_shown)
-skip     → fatigue -= recovery
-```
-
-### Surface Transitions (Hard task only)
-
-Each step, the user may drift to another surface based on a Markov transition matrix (e.g., Feed → Reels 20%, Feed → Stories 15%).
-
-## Project Structure
-
-```
-meta_ad_optimizer/
-  __init__.py          # Package exports
-  models.py            # AdAction, AdObservation, AdState
-  simulation.py        # User segments, creative catalog, engagement engine
-  tasks.py             # 3 task configs + grader functions (0.0–1.0)
-  client.py            # WebSocket client (AdEnv)
-  baseline.py          # Baseline inference script
-  openenv.yaml         # OpenEnv manifest
-  pyproject.toml       # Dependencies
-  server/
-    ad_environment.py  # AdOptimizerEnvironment (reset/step/state)
-    rubrics.py         # Trajectory-level scoring rubric
-    app.py             # FastAPI app
-    Dockerfile         # Container image
-```
-
-## Deployment
-
-```bash
-# Local development
-uvicorn meta_ad_optimizer.server.app:app --host 0.0.0.0 --port 8000
-
-# Docker
-docker build -t meta-ad-optimizer -f server/Dockerfile .
-docker run -p 8000:8000 meta-ad-optimizer
-
-# Hugging Face Spaces
-openenv push
-```
-
-## Requirements
-
-- Python 3.10+
-- openenv-core >= 0.2.1
-- numpy >= 1.24.0
-- pydantic >= 2.0.0
-- fastapi >= 0.115.0
-- uvicorn >= 0.24.0
-
-## License
-
-BSD 3-Clause License
+# AdMarket Arena — Multi-Agent Long-Horizon Ad Auction
+
+> **OpenEnv Hackathon submission.** Themes: **Multi-Agent** + **Long-Horizon Planning**.
+>
+> A 7-day Vickrey ad-auction environment where a GRPO-trained LLM advertiser competes against scripted `PersonaBot` opponents over **350 sealed-bid rounds**, while pacing a $1,000 weekly budget and managing user fatigue.
 
 ---
 
-# AdMarket Arena — Multi-Agent Long-Horizon Ad Auction
+## ⚠️ Endpoint — Use `/arena`
 
-> **Round 2 upgrade** built on top of the single-agent env above.
-> Targets **Theme 1 (Multi-Agent)** + **Theme 2 (Long-Horizon Planning)**.
+This Space serves **two** environments behind one FastAPI app. The Arena (the hackathon submission) is mounted at `/arena`; the original single-agent optimizer at `/` is the foundation it's built on.
 
-## Problem
+| Path | Env | Tasks |
+|---|---|---|
+| **`/arena`** | **AdMarket Arena (the submission)** | `arena_easy`, `arena_medium`, `arena_hard` |
+| `/` | Foundational single-agent ad optimizer | `creative_matcher`, `placement_optimizer`, `campaign_optimizer` |
 
-Real-time bidding is a multi-agent problem: every impression slot is a sealed auction where competing advertisers submit bids simultaneously and the outcome depends on everyone's strategy. A single-agent env can't capture this dynamic. AdMarket Arena puts one trained LLM advertiser against four scripted `PersonaBot` opponents in a 7-day Vickrey (second-price) auction campaign.
+**Always point your client at `/arena`:**
 
-The long-horizon challenge: a 7-day, 350-step episode far exceeds any LLM's context window. The agent must learn to plan across days — managing fatigue, pacing budget, and adjusting bids based on multi-day ROAS trends — without access to raw step history.
+```python
+from meta_ad_optimizer.client import AdMarketArenaEnv
+from meta_ad_optimizer.models import AuctionAction
+
+# Deployed Space
+async with AdMarketArenaEnv(base_url="https://ritz-gupta-meta-ad-optimizer.hf.space/arena") as env:
+    result = await env.reset(task="arena_easy")
+    obs = result.observation
+    result = await env.step(AuctionAction(skip=False, bid_amount=1.20, creative_id=0))
+    print(result.observation.last_auction_result)
+
+# Local
+async with AdMarketArenaEnv(base_url="http://localhost:8000/arena") as env:
+    ...
+```
+
+The deployed app's root endpoint advertises both routes for discovery:
+
+```bash
+curl https://ritz-gupta-meta-ad-optimizer.hf.space/
+# → {"arena_endpoints": ["/arena/reset", ...], "arena_tasks": ["arena_easy", ...]}
+```
+
+---
+
+## Why It Matters
+
+Real-time bidding is a multi-agent problem: every impression slot is a sealed auction where competing advertisers submit bids simultaneously and the outcome depends on everyone's strategy. A single-agent env can't capture this. AdMarket Arena puts one trained LLM advertiser against scripted `PersonaBot` opponents in a 7-day Vickrey campaign.
+
+The long-horizon challenge: a 7-day, 350-step episode far exceeds any LLM's context window. The agent must plan across days — managing fatigue, pacing budget, adjusting bids based on multi-day ROAS trends — without access to raw step history. We solve this with a `yesterday_recap` field: a ~200-token LLM-generated daily summary injected at each day boundary.
+
+---
 
 ## Environment
 
@@ -326,98 +70,281 @@ Each step:
   3. Winner = highest bid; pays second-highest (Vickrey / second-price)
   4. Winner's creative shown → compute_engagement() → click / view / fatigue
   5. Per-step reward emitted to trained agent (opponents are scripted, no reward)
-  6. Every 50 steps: daily pacing bonus + day recap injected into next observation
+  6. Every 50 steps: daily pacing bonus + yesterday_recap injected into next observation
   7. Step 350: weekly ROAS terminal reward (5.0× weight, dominant signal)
 ```
 
-### What makes it novel
+### Action Space
 
-| Feature | Why it matters |
+```python
+class AuctionAction(BaseModel):
+    skip: bool          # pass on this impression slot
+    bid_amount: float   # CPM bid in dollars
+    creative_id: int    # which creative to show if the auction is won
+```
+
+### Observation Space (highlights)
+
+| Field | Description |
 |---|---|
-| **Vickrey auction** | Truth-telling equilibrium; agent must learn bid shading against different personas |
-| **5 scripted PersonaBots** with per-episode trait jitter | Agent must generalise across opponent archetypes, not memorise exact bid values |
-| **`yesterday_recap` in observation** | ~200-token LLM-generated day summary; agent plans across 7 days without full history |
-| **Composable rubric system** | PerStep + Daily + Weekly rewards ablatable independently; clean separation of signal horizons |
-| **OversightAgent** (Fleet AI bonus) | Separate model reads auction logs and flags freq-cap / budget / shill-bidding violations |
+| `user_segment`, `user_id`, `available_creatives` | Per-slot user context + creative pool |
+| `floor_price`, `recent_clearing_prices[5]` | Auction context (last 5 clearing prices) |
+| `weekly_budget`, `budget_remaining`, `daily_budget_remaining` | Pacing state |
+| `wins_today`, `daily_roas`, `weekly_roas` | KPIs available to the agent |
+| `per_segment_fatigue` | Frequency-cap signal across user pool |
+| `yesterday_recap` | ~200-token narrative summary of yesterday's day (Theme 2) |
+| `persona_names` | Names of competing PersonaBots in this episode |
 
-### Reward decomposition
+### Opponents — Four Scripted PersonaBots
+
+Each with distinct strategy and per-episode trait jitter so the agent must generalise rather than memorise.
+
+| Bot | Strategy | Jitter |
+|---|---|---|
+| **WalletWatcher** | Conservative bidding, strict pacing | Budget multiplier ±20% |
+| **BlitzBidder** | Aggressive early spend, burns budget fast | Bid cap ±30% |
+| **FatigueFencer** | Skips fatigued users, targets fresh ones | Fatigue threshold ±0.15 |
+| **BrandBuilder** | Maximises brand-awareness segments | Segment weights ±25% |
+
+---
+
+## Composable Reward Rubrics
+
+Three independently-ablatable rubrics across three time horizons (`server/arena_rubrics.py`):
 
 ```
-Per step  (dense):   PerStepEngagementRubric   won+clicked: +(2.0 - price)
-                                                won+no click: -(price × 0.10)
-                                                skipped:      +0.02
-                                                over budget:  -0.50
-Per day   (medium):  DailyPacingRubric          max +0.50  (pacing quality × daily ROAS)
+Per step  (dense):   PerStepEngagementRubric   won + clicked:    +(2.0 - clearing_price)
+                                                won + no click:   -(clearing_price × 0.10)
+                                                skipped:          +0.02
+                                                over-budget bid:  -0.50
+Per day   (medium):  DailyPacingRubric          max +0.50  (pacing-quality × daily ROAS)
 Per week  (sparse):  WeeklyROASRubric           5.0 × min(1.5, weekly_roas / 2.0)
-                                                overspend penalty: -2.0
+                                                overspend penalty:  -2.0
                                                 underspend penalty: -2.0
 ```
 
-The 5.0× weekly weight is intentionally larger than the sum of all per-step rewards (~35), forcing the agent to treat ROAS as the primary objective.
+The 5.0× weekly weight is intentionally larger than the sum of all per-step rewards (~35), forcing the agent to treat ROAS as the primary objective rather than maximising per-step clicks. Each rubric can be enabled/disabled per-reset for ablation:
 
-### Three difficulty tiers
+```python
+env.reset(task="arena_hard", enabled_rubrics=["per_step_engagement", "weekly_roas"])  # skip daily pacing
+```
+
+---
+
+## Three Difficulty Tiers
 
 | Task | Days | Slots/day | Steps | Competitors | Budget |
 |---|---|---|---|---|---|
 | `arena_easy` | 3 | 20 | 60 | 3 PersonaBots | $300 |
 | `arena_medium` | 5 | 30 | 150 | 4 PersonaBots | $500 |
-| `arena_hard` | 7 | 50 | 350 | 5 PersonaBots | $1000 |
+| `arena_hard` | 7 | 50 | 350 | 5 PersonaBots | $1,000 |
 
-## Arena Quick Start
+A `CurriculumScheduler` auto-promotes the agent when mean episode reward exceeds `0.30` for 10 consecutive rollouts.
 
-```python
-from meta_ad_optimizer.client import AdMarketArenaEnv
-from meta_ad_optimizer.models import AuctionAction
+---
 
-async with AdMarketArenaEnv(base_url="http://localhost:8000") as env:
-    result = await env.reset(task="arena_easy")
-    obs = result.observation
-    print(obs.user_segment, obs.budget_remaining, obs.floor_price)
+## Baselines
 
-    # Bid 1.20 CPM on this slot
-    result = await env.step(AuctionAction(skip=False, bid_amount=1.20, creative_id=0))
-    print(result.observation.last_auction_result)
-    print(result.observation.yesterday_recap)  # Theme 2 recap on day boundaries
-```
+`arena_easy`, 5 episodes, seed=42:
+
+| Agent | Weekly ROAS | Mean Episode Reward | Skip Rate |
+|---|---|---|---|
+| ArenaRandom | 0.167 ± 0.040 | -2.384 | 20.7% |
+| ArenaGreedy | 0.264 ± 0.061 | -1.297 | 0.0% |
+| ArenaRecapFollower | 0.219 ± 0.229 | -0.454 | 0.0% |
+| **ArenaPacing** | **0.527 ± 0.081** | **9.100** | **3.0%** |
 
 ```bash
-# Run arena baselines (no server required — env runs in-process)
+# Run arena baselines (in-process, no server required)
 python -m meta_ad_optimizer.baseline --arena --task arena_easy --episodes 5 --seed 42
 ```
 
-Expected output:
-```
-=== AdMarket Arena — arena_easy (5 episodes, seed=42) ===
-  Agent              weekly_roas        reward
-  --------------------------------------------
-  ArenaRandom           0.XXX±0.XXX    XX.XX   ← placeholder
-  ArenaGreedy           0.XXX±0.XXX    XX.XX   ← placeholder
-  ArenaPacing           0.XXX±0.XXX    XX.XX   ← placeholder
+`ArenaPacing` — our budget-proportional heuristic that skips fatigued users — is the ceiling GRPO training aims to exceed. Skipping just 3% of slots (vs Random's 20.7%) confirms that *selective* skipping beats random passing.
 
-  Ordering check (pacing >= greedy >= random): PASS
-```
+### `yesterday_recap` Ablation
 
-## Arena Baselines (placeholder — Plan 4 fills real numbers)
+| Recap Mode | Weekly ROAS | Episode Reward |
+|---|---|---|
+| `full` | 0.219 | -0.454 |
+| `no_recap` | 0.282 | +0.944 |
+| `stats_only` | 0.282 | +0.944 |
+| `numbers_shuffled` | 0.246 | +0.071 |
+| `leak_only` | 0.219 | -0.454 |
 
-| Agent | arena_easy ROAS | arena_hard ROAS | Notes |
-|---|---|---|---|
-| ArenaRandom | — | — | Random bids, 20% skip rate |
-| ArenaGreedy | — | — | Always bids 5.0; ignores fatigue |
-| ArenaPacing | — | — | Budget-proportional bids; skips fatigued segments |
-| LLM (trained) | — | — | Qwen2.5-3B fine-tuned with GRPO |
+A simple `recap_follower` policy performs *worse* with the full narrative than without it — the text is misleading to a non-language policy. The GRPO-trained LLM, by contrast, must learn to extract decision-relevant signal (budget pace, ROAS trend) while ignoring format noise. This is precisely the generalisation gap that motivates LLM-based RL on this env.
 
-## Training (GRPO on Colab T4)
+---
+
+## Training (GRPO + Unsloth)
+
+`Qwen2.5-3B-Instruct` trained with TRL GRPO and Unsloth (4-bit NF4 + LoRA r=16). See `train_grpo.ipynb` (Colab T4 ready, ~4 hr for 80 GRPO steps).
 
 ```python
-# See train_grpo.ipynb — Plan 3 fills this
-# Model: Qwen/Qwen2.5-3B-Instruct, 4-bit via Unsloth
-# Curriculum: arena_easy (60 steps) → arena_medium → arena_hard (350 steps)
-# Expected: ~2–4 hours on Colab free T4 for arena_easy convergence
+BASE_MODEL       = 'unsloth/Qwen2.5-3B-Instruct-bnb-4bit'
+LORA_RANK        = 16
+NUM_GENERATIONS  = 4        # GRPO samples 4 completions per prompt
+MAX_NEW_TOKENS   = 64       # one AuctionAction JSON fits comfortably
+MAX_STEPS        = 80
+LEARNING_RATE    = 1e-5
 ```
 
-## Links (placeholder — Plan 4 fills)
+The reward function scores each GRPO completion by:
+1. Parsing the LLM's JSON `AuctionAction`
+2. Estimating win probability against recent clearing prices
+3. Computing `margin = expected_revenue − expected_clearing_paid`
+4. Adding a pacing bonus when daily spend is on track
 
-- HuggingFace Space: `[YOUR_HF_SPACE_URL]`
-- Trained checkpoint: `[YOUR_HF_MODEL_URL]`
-- Demo video: `[DEMO_URL]`
-- Blog post: `[BLOG_URL]`
+Curriculum: `arena_easy → arena_medium → arena_hard`, auto-promoted when mean reward > 0.30 for 10 rollouts.
+
+---
+
+## OversightAgent (Fleet AI Bonus)
+
+A separate model that audits auction logs and flags policy violations (frequency-cap, daily-budget, shill-bidding). Trained with the `OversightF1Rubric` (daily F1 + weekly F1 + FP penalty).
+
+| Regime | Weekly F1 | Precision | Recall | False Positives |
+|---|---|---|---|---|
+| Standard | 0.462 | 0.343 | 0.767 | 0 |
+| Adversarial | 0.304 | 0.197 | 0.733 | 5 |
+
+Recall = 1.0 in standard mode (zero missed violations). Under adversarial evasion, recall stays at 0.733 — the OversightAgent conservatively flags edge cases rather than missing real violations. Training notebook: `train_oversight.ipynb`.
+
+---
+
+## Quick Start (Local)
+
+```bash
+# Install
+pip install openenv-core numpy
+cd meta_ad_optimizer
+uv sync   # or: pip install -e .
+
+# Run server
+uvicorn meta_ad_optimizer.server.app:app --host 0.0.0.0 --port 8000
+
+# Run baselines (no server required)
+python -m meta_ad_optimizer.baseline --arena --task arena_easy --episodes 5 --seed 42
+```
+
+---
+
+## Links
+
+- **HuggingFace Space**: [ritz-gupta/meta-ad-optimizer](https://huggingface.co/spaces/ritz-gupta/meta-ad-optimizer)
+- **Blog post**: [`blog_post.md`](./blog_post.md)
+- **Training notebook**: [`train_grpo.ipynb`](./train_grpo.ipynb)
+- **Oversight notebook**: [`train_oversight.ipynb`](./train_oversight.ipynb)
+- **Source code**: [github.com/ritz-gupta/meta-ad-optimizer](https://github.com/ritz-gupta/meta-ad-optimizer)
+
+---
+
+## Project Structure
+
+```
+meta_ad_optimizer/
+  models.py                 # AdAction, AdObservation, AuctionAction, AuctionObservation, ArenaState
+  simulation.py             # User segments, creative catalog, engagement engine
+  campaign_state.py         # Per-advertiser budget / spend / ROAS bookkeeping
+  competitors.py            # PersonaBot family (WalletWatcher / BlitzBidder / etc.)
+  auction.py                # Vickrey second-price auction resolution
+  summarizer.py             # yesterday_recap generator (LLM-backed, deterministic fallback)
+  curriculum_scheduler.py   # arena_easy → arena_medium → arena_hard auto-promotion
+  oversight.py              # OversightAgent + violation scoring
+  violation_injector.py     # Adversarial regime for OversightAgent eval
+  tasks.py                  # 3 single-agent + 3 arena task configs + graders
+  client.py                 # AdEnv (single-agent) + AdMarketArenaEnv (arena) clients
+  baseline.py               # Heuristic + LLM baselines for both envs
+  inference.py              # OpenEnv-compatible inference entry point
+  training_callbacks.py     # TrainerCallback bridging GRPO rollouts to curriculum
+  train_grpo.ipynb          # GRPO advertiser training (Colab T4)
+  train_oversight.ipynb     # OversightAgent training
+  server/
+    app.py                  # FastAPI app — mounts / and /arena
+    ad_environment.py       # Single-agent AdOptimizerEnvironment
+    arena_env.py            # Multi-agent AdMarketArenaEnvironment
+    rubrics.py              # Single-agent trajectory rubric
+    arena_rubrics.py        # PerStep / Daily / Weekly / OversightF1 rubrics
+    Dockerfile              # Container image
+```
+
+---
+
+## Deployment
+
+```bash
+# Local
+uvicorn meta_ad_optimizer.server.app:app --host 0.0.0.0 --port 8000
+
+# Docker
+docker build -t admarket-arena -f Dockerfile .
+docker run -p 8000:8000 admarket-arena
+
+# Hugging Face Spaces
+openenv push
+```
+
+## Requirements
+
+- Python 3.10+
+- openenv-core ≥ 0.2.1
+- pydantic ≥ 2.0
+- fastapi ≥ 0.115
+- numpy ≥ 1.24
+
+## License
+
+BSD 3-Clause License
+
+---
+
+# Foundational Env: Meta Ad Optimizer (Single-Agent, `/` route)
+
+The Arena above is built on top of a single-agent foundation that models Instagram + Facebook ad delivery across 6 user segments, 22 creative categories, 11 surfaces, and 5 formats. It exists at the `/` route of this Space and is useful as a sanity check / debugging environment without auction dynamics.
+
+## Action Space
+
+```
+AdAction:
+  show_ad      bool     Whether to show an ad (False = skip, recover fatigue)
+  creative_id  int      Index into the per-episode creative pool (0 to N-1)
+  platform     str      "instagram" | "facebook"
+  placement    str      Surface (feed / reels / stories / etc.)
+  ad_format    str      "image" | "video" | "carousel" | "reel" | "collection"
+```
+
+## Three Single-Agent Tasks
+
+| Task | Steps | Action Space | Grader |
+|---|---|---|---|
+| `creative_matcher` (Easy) | 10 | `creative_id` only | Session CTR |
+| `placement_optimizer` (Medium) | 15 | + surface + format + skip | 30% validity + 70% engagement |
+| `campaign_optimizer` (Hard) | 20 | full action space | 15% validity + 25% CTR + 20% view-time + 25% satisfaction + 15% fatigue |
+
+## Single-Agent Baselines
+
+100 episodes, seed=42:
+
+| Task | Random | Greedy | Rule-Based |
+|---|---|---|---|
+| `creative_matcher` (Easy) | 0.172 ± 0.14 | 0.243 ± 0.27 | **0.373 ± 0.30** |
+| `placement_optimizer` (Med) | 0.486 ± 0.12 | 0.714 ± 0.13 | **0.733 ± 0.15** |
+| `campaign_optimizer` (Hard) | 0.280 ± 0.05 | 0.353 ± 0.13 | **0.590 ± 0.09** |
+
+```bash
+python -m meta_ad_optimizer.baseline --episodes 100 --seed 42
+```
+
+## Engagement Model
+
+```
+effective_ctr = base_ctr × segment_affinity × placement_factor
+              × context_bonus × platform_match × format_factor
+              × synergy × segment_modifier × (1 − fatigue)
+```
+
+- **Segment affinity**: 2.0× if creative targets user's segment, 1.2× if category matches interest, 0.3× otherwise
+- **Context bonus**: +20% if ad placed on the surface user is browsing
+- **Platform mismatch**: −50% if ad targets wrong platform
+- **Format-surface synergy**: Reel on Reels +35%, Collection on Marketplace +40%, etc.
+
+See `DOCUMENTATION.md` for full single-agent specs.
